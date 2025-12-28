@@ -125,10 +125,11 @@ class Tokenizer:
         else:
             text_chunks = [text]
         
+        # Применяем PATTERN к каждому чанку отдельно
         chunks: list[str] = []
         t0 = time()
         for text_chunk in text_chunks:
-            if text_chunk: 
+            if text_chunk:  # фильтруем пустые строки
                 chunks.extend(PATTERN.findall(text_chunk))
         print(f"Chunking with regex: {time() - t0}")
         chunk_freq: dict[tuple[int, ...], int] = {} # {(1, 2, 3) : 52}
