@@ -599,8 +599,8 @@ def run_train_bpe(
     
     tokenizer = Tokenizer(special_tokens=special_tokens)
     
-    with open(input_path, 'r', encoding='utf-8') as f:
-        text = f.read()
+    with open(input_path, 'rb') as f:
+        text = f.read().decode('utf-8', errors='ignore')
     
     tokenizer.train(text, vocab_size)
     

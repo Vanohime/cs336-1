@@ -97,36 +97,48 @@ class Tokenizer:
             raise ValueError("Tokenizer is already trained")
         self.trained = True
         if self.special_tokens:
-            special_pattern = re.compile("|".join(re.escape(t) for t in self.special_tokens))
-            text = special_pattern.sub("", text)
+            escaped_tokens = [re.escape(token) for token in self.special_tokens]
+            delimiter = "|".join(escaped_tokens)
+            text_chunks = re.split(delimiter, text)
+        else:
+            text_chunks = [text]
         
-        chunks: list[str] = PATTERN.findall(text)
+        chunks: list[str] = []
+        for text_chunk in text_chunks:
+            if text_chunk: 
+                chunks.extend(re.findall(PATTERN, text_chunk))
         chunk_freq: dict[tuple[int, ...], int] = {} # {(1, 2, 3) : 52}
         for chunk in chunks:
-            chunk_tuple = tuple(chunk.encode('utf-8'))
-            chunk_freq[chunk_tuple] = chunk_freq.get(chunk_tuple, 0) + 1
+            if chunk:  
+                chunk_tuple = tuple(chunk.encode('utf-8'))
+                chunk_freq[chunk_tuple] = chunk_freq.get(chunk_tuple, 0) + 1
 
-        num_merges = vocab_size - 256 - len(self.special_tokens)
         self.vocab = {i : bytes([i]) for i in range(256)}
+        self.bytes_to_id = {v: k for k, v in self.vocab.items()}
+        
+        self.create_special_token_mapping()
+        next_id = max(self.vocab.keys()) + 1 
+        num_merges = vocab_size - next_id
+        
         for i in range(num_merges):
             stats = {}
             for chunk_tuple in chunk_freq:
                 stats = get_stats(ids=chunk_tuple, counts=stats, multiply=chunk_freq[chunk_tuple])
-            sorted_pairs = sorted(stats.keys(), key=lambda x: (stats[x], self.vocab[x[0]], self.vocab[x[1]]))
-            pair = sorted_pairs[-1] 
+            # Сортируем как в reference: (count, tok1_id, tok2_id)
+            pair = max(stats.keys(), key=lambda x: (stats[x], self.vocab[x[0]], self.vocab[x[1]]))
             new_chunk_freq = {}
             for chunk_tuple, freq in chunk_freq.items():
                 if pair_in_tuple(chunk_tuple, pair):
-                    merged_chunk = tuple(merge(list(chunk_tuple), pair, i + 256))
+                    merged_chunk = tuple(merge(list(chunk_tuple), pair, next_id))
                     new_chunk_freq[merged_chunk] = new_chunk_freq.get(merged_chunk, 0) + freq
                 else:
                     new_chunk_freq[chunk_tuple] = freq
             chunk_freq = new_chunk_freq
-            self.merges[pair] = i + 256
-            self.vocab[i + 256] = self.vocab[pair[0]] + self.vocab[pair[1]]
-        #self.create_vocab()
+            self.merges[pair] = next_id
+            self.vocab[next_id] = self.vocab[pair[0]] + self.vocab[pair[1]]
+            next_id += 1
+        
         self.bytes_to_id = {v: k for k, v in self.vocab.items()}
-        self.create_special_token_mapping()
         self._max_token_length = None 
 
     def encode_casual(self, text):
