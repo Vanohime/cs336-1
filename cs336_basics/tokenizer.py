@@ -97,19 +97,19 @@ class Tokenizer:
             raise ValueError("Tokenizer is already trained")
         self.trained = True
         if self.special_tokens:
-            escaped_tokens = [re.escape(token) for token in self.special_tokens]
-            delimiter = "|".join(escaped_tokens)
-            text_chunks = re.split(delimiter, text)
+            special_pattern = "|".join(re.escape(t) for t in self.special_tokens)
+            text_chunks = re.split(special_pattern, text)
         else:
             text_chunks = [text]
         
+        # Применяем PATTERN к каждому чанку отдельно
         chunks: list[str] = []
         for text_chunk in text_chunks:
-            if text_chunk: 
-                chunks.extend(re.findall(PATTERN, text_chunk))
+            if text_chunk:  # фильтруем пустые строки
+                chunks.extend(PATTERN.findall(text_chunk))
         chunk_freq: dict[tuple[int, ...], int] = {} # {(1, 2, 3) : 52}
         for chunk in chunks:
-            if chunk:  
+            if chunk:
                 chunk_tuple = tuple(chunk.encode('utf-8'))
                 chunk_freq[chunk_tuple] = chunk_freq.get(chunk_tuple, 0) + 1
 
