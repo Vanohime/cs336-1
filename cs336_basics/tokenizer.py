@@ -1,5 +1,9 @@
 import regex as re
 from typing import Iterable
+import pickle
+import os
+import multiprocessing
+from time import time
 
 def get_stats(
     ids: tuple[int, ...] | list[int], 
@@ -30,6 +34,23 @@ def pair_in_tuple(tup: tuple[int, ...], pair: tuple[int, int]) -> bool:
             return True
     return False
 
+def get_stats_from_list(chunks: list[tuple[int, ...]], freqs: list[int]):
+    stats = {}
+    for chunk, freq in zip(chunks, freqs):
+        stats = get_stats(ids=chunk, counts=stats, multiply=freq)
+    return stats
+
+def prepare_chunks_for_multiproc(chunk_freq: dict[tuple, int], num_processes: int = 4):
+    total_len = sum(len(x) for x in chunk_freq)
+    len_per_process = total_len // num_processes
+    chunk_lists = [([], []) for _ in range(num_processes)]
+    for i, chunk in enumerate(chunk_freq):
+        idx = i % num_processes
+        chunk_lists[idx][0].append(chunk)
+        chunk_lists[idx][1].append(chunk_freq[chunk])
+    assert len(chunk_lists) == num_processes
+    return chunk_lists
+ 
 PATTERN = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
 class Tokenizer:
@@ -97,21 +118,26 @@ class Tokenizer:
             raise ValueError("Tokenizer is already trained")
         self.trained = True
         if self.special_tokens:
+            t0 = time()
             special_pattern = "|".join(re.escape(t) for t in self.special_tokens)
             text_chunks = re.split(special_pattern, text)
+            print(f"Removing special tokens: {time() - t0} sec")
         else:
             text_chunks = [text]
         
         chunks: list[str] = []
+        t0 = time()
         for text_chunk in text_chunks:
             if text_chunk: 
                 chunks.extend(PATTERN.findall(text_chunk))
+        print(f"Chunking with regex: {time() - t0}")
         chunk_freq: dict[tuple[int, ...], int] = {} # {(1, 2, 3) : 52}
+        t0 = time()
         for chunk in chunks:
             if chunk:
                 chunk_tuple = tuple(chunk.encode('utf-8'))
                 chunk_freq[chunk_tuple] = chunk_freq.get(chunk_tuple, 0) + 1
-
+        print(f"Conputing frequensies for each chunk: {time() - t0}")
         self.vocab = {i : bytes([i]) for i in range(256)}
         self.bytes_to_id = {v: k for k, v in self.vocab.items()}
         
@@ -119,24 +145,39 @@ class Tokenizer:
         next_id = max(self.vocab.keys()) + 1 
         num_merges = vocab_size - next_id
         
-        for i in range(num_merges):
-            stats = {}
-            for chunk_tuple in chunk_freq:
-                stats = get_stats(ids=chunk_tuple, counts=stats, multiply=chunk_freq[chunk_tuple])
-            # Сортируем как в reference: (count, tok1_id, tok2_id)
-            pair = max(stats.keys(), key=lambda x: (stats[x], self.vocab[x[0]], self.vocab[x[1]]))
-            new_chunk_freq = {}
-            for chunk_tuple, freq in chunk_freq.items():
-                if pair_in_tuple(chunk_tuple, pair):
-                    merged_chunk = tuple(merge(list(chunk_tuple), pair, next_id))
-                    new_chunk_freq[merged_chunk] = new_chunk_freq.get(merged_chunk, 0) + freq
-                else:
-                    new_chunk_freq[chunk_tuple] = freq
-            chunk_freq = new_chunk_freq
-            self.merges[pair] = next_id
-            self.vocab[next_id] = self.vocab[pair[0]] + self.vocab[pair[1]]
-            next_id += 1
+        stats_latency = 0
+        merge_latency = 0
+        num_processes = 1
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            for i in range(num_merges):
+                stats = {}
+                t0 = time()
+                arg_list = prepare_chunks_for_multiproc(chunk_freq, num_processes)
+                
+                results = pool.starmap(get_stats_from_list, arg_list)
+                stats = results[0]
+                for res in results[1:]:
+                    for stat in res:
+                        stats[stat] = stats.get(stat, 0) + res[stat]
+                stats_latency += time() - t0
+
+                pair = max(stats.keys(), key=lambda x: (stats[x], self.vocab[x[0]], self.vocab[x[1]]))
+                new_chunk_freq = {}
+                t0 = time()
+                for chunk_tuple, freq in chunk_freq.items():
+                    if pair_in_tuple(chunk_tuple, pair):
+                        merged_chunk = tuple(merge(list(chunk_tuple), pair, next_id))
+                        new_chunk_freq[merged_chunk] = new_chunk_freq.get(merged_chunk, 0) + freq
+                    else:
+                        new_chunk_freq[chunk_tuple] = freq
+                merge_latency += time() - t0
+                chunk_freq = new_chunk_freq
+                self.merges[pair] = next_id
+                self.vocab[next_id] = self.vocab[pair[0]] + self.vocab[pair[1]]
+                next_id += 1
         
+        print(f"Stats total latency: {stats_latency}")
+        print(f"Merges total latency: {merge_latency}")
         self.bytes_to_id = {v: k for k, v in self.vocab.items()}
         self._max_token_length = None 
 
@@ -204,5 +245,16 @@ class Tokenizer:
             ids = self.encode(buffer)
             for token_id in ids:
                 yield token_id
+    
+    def serialize_with_pickle(vocab, merges, filename):
+        os.makedirs(os.path.split(filename)[0], exist_ok=True)
+        model = {"vocab": vocab, "merges": merges}
+        with open(filename, 'wb') as f:
+            pickle.dump(model, f)
+
+    def deserialize_with_pickle(filename):
+        with open(filename, 'rb') as f:
+            model = pickle.load(f)
+        return model['vocab'], model['merges']
         
 
