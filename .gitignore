@@ -166,3 +166,6 @@ tokenizer_requirements.txt
 out.txt
 debug_bpe*
 .cursorrules
+
+data
+saves
