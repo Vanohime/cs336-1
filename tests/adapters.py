@@ -599,10 +599,7 @@ def run_train_bpe(
     
     tokenizer = Tokenizer(special_tokens=special_tokens)
     
-    with open(input_path, 'rb') as f:
-        text = f.read().decode('utf-8', errors='ignore')
-    
-    tokenizer.train(text, vocab_size)
+    tokenizer.train_from_file(filename=input_path, vocab_size=vocab_size)
     
     sorted_merges = sorted(tokenizer.merges.items(), key=lambda x: x[1])
     merges_list = []
