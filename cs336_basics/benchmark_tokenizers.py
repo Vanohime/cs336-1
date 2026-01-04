@@ -32,7 +32,6 @@ def benchmark_tokenizer(
     text_file: str, 
     name: str,
     num_bytes: int | None = None,
-    chunk_size: int = 8192,
     num_warmup_runs: int = 1
 ) -> dict:
     """
@@ -43,7 +42,6 @@ def benchmark_tokenizer(
         text_file: Path to the text file
         name: Name of the dataset/tokenizer for display
         num_bytes: Number of bytes to read (None = read all)
-        chunk_size: Size of chunks to yield to encode_iterable
         num_warmup_runs: Number of warmup runs before timing
         
     Returns:
@@ -64,41 +62,48 @@ def benchmark_tokenizer(
     text_size_mb = text_size_bytes / (1024 ** 2)
     
     print(f"Text size: {text_size_bytes:,} bytes ({text_size_mb:.2f} MB)")
-    print(f"Chunk size: {chunk_size:,} bytes")
     
-    # Helper function to create chunk iterator (same as tokenize_datasets.py)
-    def read_chunks(file_path, chunk_size, max_bytes=None):
-        """Generator that yields chunks of text from file."""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            bytes_read = 0
-            while True:
-                # Determine how much to read
-                if max_bytes is not None:
-                    remaining = max_bytes - bytes_read
-                    if remaining <= 0:
-                        break
-                    read_size = min(chunk_size, remaining)
-                else:
-                    read_size = chunk_size
-                
-                chunk = f.read(read_size)
-                if not chunk:
-                    break
-                
-                bytes_read += len(chunk.encode('utf-8'))
-                yield chunk
+    # Helper class to limit bytes read from file
+    class LimitedReader:
+        """Wrapper that limits how many bytes can be read from a file."""
+        def __init__(self, file_obj, max_bytes):
+            self.file_obj = file_obj
+            self.max_bytes = max_bytes
+            self.bytes_read = 0
+        
+        def read(self, size=-1):
+            if self.max_bytes is not None:
+                remaining = self.max_bytes - self.bytes_read
+                if remaining <= 0:
+                    return ""
+                if size == -1 or size > remaining:
+                    size = remaining
+            
+            chunk = self.file_obj.read(size)
+            self.bytes_read += len(chunk.encode('utf-8'))
+            return chunk
     
     # Warmup runs
     if num_warmup_runs > 0:
         print(f"Running {num_warmup_runs} warmup iteration(s)...", end=' ', flush=True)
         for _ in range(num_warmup_runs):
-            warmup_tokens = list(tokenizer.encode_iterable(read_chunks(text_file, chunk_size, num_bytes)))
+            with open(text_file, 'r', encoding='utf-8') as f:
+                if num_bytes is not None:
+                    reader = LimitedReader(f, num_bytes)
+                    warmup_tokens = list(tokenizer.encode_iterable(reader))
+                else:
+                    warmup_tokens = list(tokenizer.encode_iterable(f))
         print("Done")
     
     # Benchmark encoding with encode_iterable
     print("Benchmarking encoding (encode_iterable)...", end=' ', flush=True)
     t0 = time()
-    tokens = list(tokenizer.encode_iterable(read_chunks(text_file, chunk_size, num_bytes)))
+    with open(text_file, 'r', encoding='utf-8') as f:
+        if num_bytes is not None:
+            reader = LimitedReader(f, num_bytes)
+            tokens = list(tokenizer.encode_iterable(reader))
+        else:
+            tokens = list(tokenizer.encode_iterable(f))
     elapsed = time() - t0
     print("Done")
     

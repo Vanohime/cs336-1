@@ -58,46 +58,39 @@ def tokenize_file(tokenizer: Tokenizer, input_path: str, output_path: str, chunk
     # Tokenize using encode_iterable for memory efficiency
     current_tokens = []
     temp_files = []
-    bytes_in_current_batch = 0
+    bytes_processed = 0
     temp_file_size_bytes = temp_file_size_mb * 1024 * 1024
     temp_file_counter = 0
     
-    def read_chunks_with_progress():
-        """Generator that yields chunks and updates progress."""
-        with tqdm(total=file_size, unit='B', unit_scale=True, desc="Tokenizing") as pbar:
-            with open(input_path, 'r', encoding='utf-8') as f:
-                while True:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
+    # Tokenize entire file with progress tracking
+    with tqdm(total=file_size, unit='B', unit_scale=True, desc="Tokenizing") as pbar:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            for token_id in tokenizer.encode_iterable(f):
+                current_tokens.append(token_id)
+                
+                # Update progress periodically (every 8192 tokens)
+                if len(current_tokens) % 8192 == 0:
+                    # Estimate bytes processed based on tokens
+                    estimated_bytes = int(file_size * len(current_tokens) / (file_size / 2))  # rough estimate
+                    if estimated_bytes > bytes_processed:
+                        pbar.update(estimated_bytes - bytes_processed)
+                        bytes_processed = estimated_bytes
+                
+                # Save to temp file if we've accumulated enough tokens
+                if len(current_tokens) >= (temp_file_size_bytes // 2):  # ~2 bytes per token
+                    temp_file_path = os.path.join(temp_dir, f'temp_{temp_file_counter:04d}.npy')
+                    token_array = np.array(current_tokens, dtype=np.uint16)
+                    np.save(temp_file_path, token_array)
+                    temp_files.append(temp_file_path)
                     
-                    # Update progress by chunk byte size
-                    chunk_bytes = len(chunk.encode('utf-8'))
-                    pbar.update(chunk_bytes)
+                    print(f"\n  Saved temp file {temp_file_counter}: {len(current_tokens):,} tokens ({token_array.nbytes / (1024**2):.2f} MB)")
                     
-                    yield chunk, chunk_bytes
-    
-    # Tokenize and save to temp files
-    for chunk_text, chunk_bytes in read_chunks_with_progress():
-        # Tokenize this chunk
-        for token_id in tokenizer.encode_iterable([chunk_text]):
-            current_tokens.append(token_id)
-        
-        bytes_in_current_batch += chunk_bytes
-        
-        # Save to temp file if we've processed enough bytes
-        if bytes_in_current_batch >= temp_file_size_bytes:
-            temp_file_path = os.path.join(temp_dir, f'temp_{temp_file_counter:04d}.npy')
-            token_array = np.array(current_tokens, dtype=np.uint16)
-            np.save(temp_file_path, token_array)
-            temp_files.append(temp_file_path)
+                    # Reset for next batch
+                    current_tokens = []
+                    temp_file_counter += 1
             
-            print(f"  Saved temp file {temp_file_counter}: {len(current_tokens):,} tokens ({token_array.nbytes / (1024**2):.2f} MB)")
-            
-            # Reset for next batch
-            current_tokens = []
-            bytes_in_current_batch = 0
-            temp_file_counter += 1
+            # Ensure progress bar reaches 100%
+            pbar.update(file_size - bytes_processed)
     
     # Save any remaining tokens
     if current_tokens:

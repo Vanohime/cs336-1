@@ -61,8 +61,8 @@ def get_chunk_freq(text: str, special_tokens : list[str]) -> dict[tuple[int, ...
 class Tokenizer:
     def __init__(
         self,
-        vocab: dict[int, bytes] = None,
         merges: list[tuple[bytes, bytes]] = None,
+        vocab:  dict[int, bytes] = None,
         special_tokens: list[str] | None = None
         ) -> None:
         self.trained: bool = bool(vocab and merges) 
@@ -72,7 +72,7 @@ class Tokenizer:
         self.bytes_to_id = {v: k for k, v in self.vocab.items()}
         self.merges: dict[tuple[int, int], int] = {}
         self.special_token_mapping: dict[str, int] = {}
-        for i, (p0, p1) in enumerate(merges):
+        for i, (p0, p1) in enumerate(merges or []):
             id0 = self.bytes_to_id[p0]
             id1 = self.bytes_to_id[p1]
             self.merges[(id0, id1)] = i + 256
@@ -252,31 +252,29 @@ class Tokenizer:
         This is required for memory-efficient tokenization of large files.
         
         Args:
-            iterable: An iterable of strings (e.g., file lines)
+            iterable: An iterable of strings (e.g., file handle)
             
         Yields:
             Token IDs one at a time
         """
+        CHUNK_SIZE = 1024 * 4
         SLICE_BACK_TOKENS = self._compute_max_token_length()
         
         buffer = ""
-        for chunk in iterable:
+        for chunk in iter(lambda: iterable.read(CHUNK_SIZE), ""):
             buffer += chunk
-            
-            # encode all text in buffer
-            encoded = self.encode(buffer)
-            
-            # Keep last SLICE_BACK_TOKENS in buffer to handle tokens split across chunks
-            if len(encoded) > SLICE_BACK_TOKENS:
+            if chunk != "":
+                # encode all text in buffer
+                encoded = self.encode(buffer)
                 # get all tokens except the last SLICE_BACK_TOKENS
                 to_yield_from = encoded[:-SLICE_BACK_TOKENS]
                 # last SLICE_BACK_TOKENS tokens
                 to_buffer_tokens = encoded[-SLICE_BACK_TOKENS:]
                 # decode them back, they are our new buffer
                 buffer = self.decode(to_buffer_tokens)
-                
-                for token_id in to_yield_from:
-                    yield token_id
+                if to_yield_from:
+                    for token_id in to_yield_from:
+                        yield token_id
         
         # Encode and yield any remaining buffer
         if buffer:
