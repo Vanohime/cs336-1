@@ -83,7 +83,7 @@ def tokenize_file(tokenizer: Tokenizer, input_path: str, output_path: str, chunk
                     np.save(temp_file_path, token_array)
                     temp_files.append(temp_file_path)
                     
-                    print(f"\n  Saved temp file {temp_file_counter}: {len(current_tokens):,} tokens ({token_array.nbytes / (1024**2):.2f} MB)")
+                    tqdm.write(f"  Saved temp file {temp_file_counter}: {len(current_tokens):,} tokens ({token_array.nbytes / (1024**2):.2f} MB)")
                     
                     # Reset for next batch
                     current_tokens = []
