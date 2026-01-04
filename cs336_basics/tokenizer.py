@@ -32,12 +32,6 @@ def merge(ids: list[int], pair: tuple[int, int], idx: int) -> list[int]:
             i +=1
     return result
 
-def pair_in_tuple(tup: tuple[int, ...], pair: tuple[int, int]) -> bool:
-    for i in range(len(tup) - 1):
-        if (tup[i], tup[i+1]) == pair:
-            return True
-    return False
-
 PATTERN = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
 def get_chunk_freq(text: str, special_tokens : list[str]) -> dict[tuple[int, ...], int]:
