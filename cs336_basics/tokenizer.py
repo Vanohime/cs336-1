@@ -1,5 +1,5 @@
 import regex as re
-from typing import Iterable
+from typing import Iterable, Iterator
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 from  multiprocessing import Pool
 from sortedcontainers import SortedSet
@@ -7,6 +7,7 @@ import os
 import pickle
 from time import time
 from tqdm import tqdm
+import json
 
 def get_stats(
     ids: tuple[int, ...] | list[int], 
@@ -60,16 +61,17 @@ def get_chunk_freq(text: str, special_tokens : list[str]) -> dict[tuple[int, ...
 class Tokenizer:
     def __init__(
         self,
-        merges: list[tuple[bytes, bytes]] = [],
-        vocab:  dict[int, bytes] = {},
+        vocab: dict[int, bytes] = None,
+        merges: list[tuple[bytes, bytes]] = None,
         special_tokens: list[str] | None = None
         ) -> None:
         self.trained: bool = bool(vocab and merges) 
         if vocab and not merges or not vocab and merges:
             raise ValueError("Provide both vocab and merges")
-        self.vocab: dict[int, bytes] = vocab
+        self.vocab: dict[int, bytes] = vocab or {}
         self.bytes_to_id = {v: k for k, v in self.vocab.items()}
         self.merges: dict[tuple[int, int], int] = {}
+        self.special_token_mapping: dict[str, int] = {}
         for i, (p0, p1) in enumerate(merges):
             id0 = self.bytes_to_id[p0]
             id1 = self.bytes_to_id[p1]
@@ -77,9 +79,61 @@ class Tokenizer:
         
         self.special_tokens: list[str] = sorted(special_tokens, key = lambda x: (-len(x), x)) if special_tokens else []
         self._max_token_length: int | None = None 
-        if self.special_tokens:
+        self.encode_cash = {}
+        self.create_special_token_mapping()
+    
+    @classmethod
+    def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] | None = None):
+        """
+        Construct a Tokenizer from serialized vocabulary and merges files.
+        
+        Args:
+            vocab_filepath: Path to vocabulary JSON file
+            merges_filepath: Path to merges text file
+            special_tokens: Optional list of special tokens
+            
+        Returns:
+            Tokenizer instance
+        """
+        # Load vocabulary from JSON file
+        with open(vocab_filepath, 'r', encoding='utf-8') as f:
+            vocab_dict_str_keys = json.load(f)
+        
+        # Convert string keys to int keys
+        vocab = {int(k): v.encode('utf-8') if isinstance(v, str) else v 
+                 for k, v in vocab_dict_str_keys.items()}
+        
+        # Load merges from text file
+        merges = []
+        with open(merges_filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    # Parse merge line, expecting format like "token1 token2"
+                    parts = line.split(' ')
+                    if len(parts) >= 2:
+                        token1 = parts[0].encode('utf-8')
+                        token2 = parts[1].encode('utf-8')
+                        merges.append((token1, token2))
+        
+        return cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
+    
+    def create_special_token_mapping(self):
+        self.special_token_mapping: dict[str, int] = {}
+        if self.special_tokens and self.vocab:
             pattern = "|".join(re.escape(token) for token in self.special_tokens)
             self.special_pattern = re.compile(f"({pattern})")
+            for token in self.special_tokens:
+                token_bytes = token.encode('utf-8')
+                if token_bytes in self.bytes_to_id:
+                    self.special_token_mapping[token] = self.bytes_to_id[token_bytes]
+                else:
+                    new_token_id = max(self.vocab.keys(), default=255) + 1
+                    self.special_token_mapping[token] = new_token_id
+                    self.vocab[new_token_id] = token_bytes
+                    self.bytes_to_id[token_bytes] = new_token_id
+        else:
+            self.special_pattern = None
     
     def _compute_max_token_length(self):
         if self._max_token_length is not None:
@@ -93,6 +147,60 @@ class Tokenizer:
         max_special_token_len = max(len(token.encode('utf-8')) for token in self.special_tokens) if self.special_tokens else 0
         self._max_token_length = max(max_vocab_token_len, max_special_token_len) + 50
         return self._max_token_length
+
+    def create_vocab(self):
+        self.vocab = {i : bytes([i]) for i in range(256)}
+        for (p0, p1), ind in self.merges.items():
+            self.vocab[ind] = self.vocab[p0] + self.vocab[p1]
+        self.bytes_to_id = {v: k for k, v in self.vocab.items()}
+
+    def train(self, text: str, vocab_size: int) -> None:
+        assert vocab_size >= 256
+        if self.trained:
+            raise ValueError("Tokenizer is already trained")
+        self.trained = True
+        if self.special_tokens:
+            special_pattern = "|".join(re.escape(t) for t in self.special_tokens)
+            text_chunks = re.split(special_pattern, text)
+        else:
+            text_chunks = [text]
+        
+        chunks: list[str] = []
+        for text_chunk in text_chunks:
+            if text_chunk: 
+                chunks.extend(PATTERN.findall(text_chunk))
+        chunk_freq: dict[tuple[int, ...], int] = {} # {(1, 2, 3) : 52}
+        for chunk in chunks:
+            if chunk:
+                chunk_tuple = tuple(chunk.encode('utf-8'))
+                chunk_freq[chunk_tuple] = chunk_freq.get(chunk_tuple, 0) + 1
+
+        self.vocab = {i : bytes([i]) for i in range(256)}
+        self.bytes_to_id = {v: k for k, v in self.vocab.items()}
+        
+        self.create_special_token_mapping()
+        next_id = max(self.vocab.keys()) + 1 
+        num_merges = vocab_size - next_id
+        
+        for i in range(num_merges):
+            stats = {}
+            for chunk_tuple in chunk_freq:
+                stats = get_stats(ids=chunk_tuple, counts=stats, multiply=chunk_freq[chunk_tuple])
+            pair = max(stats.keys(), key=lambda x: (stats[x], self.vocab[x[0]], self.vocab[x[1]]))
+            new_chunk_freq = {}
+            for chunk_tuple, freq in chunk_freq.items():
+                if pair_in_tuple(chunk_tuple, pair):
+                    merged_chunk = tuple(merge(list(chunk_tuple), pair, next_id))
+                    new_chunk_freq[merged_chunk] = new_chunk_freq.get(merged_chunk, 0) + freq
+                else:
+                    new_chunk_freq[chunk_tuple] = freq
+            chunk_freq = new_chunk_freq
+            self.merges[pair] = next_id
+            self.vocab[next_id] = self.vocab[pair[0]] + self.vocab[pair[1]]
+            next_id += 1
+        
+        self.bytes_to_id = {v: k for k, v in self.vocab.items()}
+        self._max_token_length = None 
 
     def encode_casual(self, text):
         ids = [self.bytes_to_id[bytes([byte])] for byte in text.encode('utf-8')]
@@ -108,52 +216,69 @@ class Tokenizer:
         chunks = PATTERN.findall(text)
         result = []
         for chunk in chunks:
-            result.extend(self.encode_casual(chunk))
+            if chunk not in self.encode_cash:
+                encoded = self.encode_casual(chunk)
+                result.extend(encoded)
+                self.encode_cash[chunk] = encoded
+            else:
+                result.extend(self.encode_cash[chunk])
         return result
         
-    def decode(self, ids):
+    def decode(self, ids: list[int]) -> str:
         tokens = b"".join([self.vocab[idx] for idx in ids])
         return tokens.decode('utf-8', errors='replace')
     
-    def encode(self, text):
+    def encode(self, text: str) -> list[int]:
         if not self.special_tokens:
             return self.encode_with_regex_split(text)
         else:
             if not self.special_pattern:
                 raise ValueError("Tokenizer's vocab is not created, but special tokens are set")
             
-            parts: list[str] = self.special_pattern.split(text)
+            parts = self.special_pattern.split(text)
             # Result: ["text", "<|endoftext|>", "more text", "<|endoftext|>", ...]
             result = []
             for part in parts:
-                if part not in self.special_tokens and part:
+                if part not in self.special_token_mapping and part: #O(1) search in a mapping and part != ""
                     encoded = self.encode_with_regex_split(part)
                     result.extend(encoded)
                 elif part: # is special token and != ""
-                    result.append(self.bytes_to_id[part.encode('utf-8')])
+                    result.append(self.special_token_mapping[part])
             return result
 
-    def encode_iterable(self, iterable):
-        CHUNK_SIZE = 1024
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        """
+        Given an iterable of strings, return a generator that lazily yields token IDs.
+        This is required for memory-efficient tokenization of large files.
+        
+        Args:
+            iterable: An iterable of strings (e.g., file lines)
+            
+        Yields:
+            Token IDs one at a time
+        """
         SLICE_BACK_TOKENS = self._compute_max_token_length()
         
         buffer = ""
-        for chunk in iter(lambda: iterable.read(CHUNK_SIZE), ""):
+        for chunk in iterable:
             buffer += chunk
-            if chunk != "":
-                # encode all text
-                encoded = self.encode(buffer)
+            
+            # encode all text in buffer
+            encoded = self.encode(buffer)
+            
+            # Keep last SLICE_BACK_TOKENS in buffer to handle tokens split across chunks
+            if len(encoded) > SLICE_BACK_TOKENS:
                 # get all tokens except the last SLICE_BACK_TOKENS
                 to_yield_from = encoded[:-SLICE_BACK_TOKENS]
                 # last SLICE_BACK_TOKENS tokens
                 to_buffer_tokens = encoded[-SLICE_BACK_TOKENS:]
                 # decode them back, they are our new buffer
-                decoded_back = self.decode(to_buffer_tokens)
-                buffer = decoded_back
-                if to_yield_from:
-                    for token_id in to_yield_from:
-                        yield token_id
+                buffer = self.decode(to_buffer_tokens)
+                
+                for token_id in to_yield_from:
+                    yield token_id
         
+        # Encode and yield any remaining buffer
         if buffer:
             ids = self.encode(buffer)
             for token_id in ids:
@@ -204,6 +329,7 @@ class Tokenizer:
                     pair_to_chunk_map[pair] = set()
                 pair_to_chunk_map[pair].add(chunk)
         
+        self.create_special_token_mapping()
         next_id = max(self.vocab.keys()) + 1 
         num_merges = vocab_size - next_id
         
