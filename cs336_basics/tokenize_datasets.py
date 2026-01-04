@@ -59,6 +59,7 @@ def tokenize_file(tokenizer: Tokenizer, input_path: str, output_path: str, chunk
     current_tokens = []
     temp_files = []
     bytes_processed = 0
+    total_tokens_processed = 0  # Track total tokens across all batches
     temp_file_size_bytes = temp_file_size_mb * 1024 * 1024
     temp_file_counter = 0
     
@@ -67,13 +68,14 @@ def tokenize_file(tokenizer: Tokenizer, input_path: str, output_path: str, chunk
         with open(input_path, 'r', encoding='utf-8') as f:
             for token_id in tokenizer.encode_iterable(f):
                 current_tokens.append(token_id)
+                total_tokens_processed += 1
                 
                 # Update progress periodically (every 8192 tokens)
-                if len(current_tokens) % 8192 == 0:
-                    # Estimate bytes processed based on tokens
-                    estimated_bytes = int(file_size * len(current_tokens) / (file_size / 2))  # rough estimate
+                if total_tokens_processed % 8192 == 0:
+                    # Simple heuristic: assume ~1.8 bytes per token on average
+                    estimated_bytes = total_tokens_processed * 1.8
                     if estimated_bytes > bytes_processed:
-                        pbar.update(estimated_bytes - bytes_processed)
+                        pbar.update(int(estimated_bytes - bytes_processed))
                         bytes_processed = estimated_bytes
                 
                 # Save to temp file if we've accumulated enough tokens
