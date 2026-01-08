@@ -70,4 +70,16 @@ class RMSNorm(nn.Module):
         result = einsum(result, self.gain, "... d_model, ... d_model -> ... d_model")
         return result.to(in_dtype)
         
+class FeedForward(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
+        super().__init__()
+        self.w1 = Linear(in_features=d_model, out_features=d_ff, device=device, dtype=dtype)
+        self.w3 = Linear(in_features=d_model, out_features=d_ff, device=device, dtype=dtype)
+        self.w2 = Linear(in_features=d_ff, out_features=d_model, device=device, dtype=dtype)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.w1(x) # (..., d_ff)
+        z = y * torch.sigmoid(y) # (..., d_ff)
+        t = self.w3(x) # (..., d_ff)
+        return self.w2(z * t) #(..., d_model)
 
