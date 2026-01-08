@@ -29,7 +29,6 @@ class Embedding(nn.Module):
         """
         Construct an embedding module. This function should accept the following parameters:
         num_embeddings: int Size of the vocabulary
-        19
         embedding_dim: int Dimension of the embedding vectors, i.e., d_model
         device: torch.device | None = None Device to store the parameters on
         dtype: torch.dtype | None = None Data type of the parameters
@@ -43,4 +42,32 @@ class Embedding(nn.Module):
     
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         return self.embedding_matrix[token_ids]
+
+class RMSNorm(nn.Module):
+    def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
+        """
+        Construct the RMSNorm module. This function should accept the following parameters:
+        d_model: int Hidden dimension of the model
+        eps: float = 1e-5 Epsilon value for numerical stability
+        device: torch.device | None = None Device to store the parameters on
+        dtype: torch.dtype | None = None Data type of the parameters
+        """
+        super().__init__()
+        self.d_model: int = d_model
+        self.eps: float = eps
+        self.gain = nn.Parameter(torch.ones((d_model,), device=device, dtype=dtype))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        in_dtype = x.dtype
+        x = x.to(torch.float32)
+        rms = einsum(x, x, "... d_model, ... d_model -> ...")
+        rms = rms.unsqueeze(-1) # (..., 1)
+        rms /= self.d_model
+        rms += self.eps
+        rms = torch.sqrt(rms)
+        inv_rms = rms ** -1
+        result = x * inv_rms
+        result = einsum(result, self.gain, "... d_model, ... d_model -> ... d_model")
+        return result.to(in_dtype)
+        
 
