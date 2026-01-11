@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 from torch.nn import init
 from einops import rearrange, einsum
-from math import sqrt, sin, cos
-import einx
+from einx import add
+from math import sqrt
+from jaxtyping import Bool, Float, Int
+from torch import Tensor
 
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
@@ -126,3 +128,18 @@ def softmax(x: torch.Tensor, i: int) -> torch.Tensor:
     x_norm = torch.exp(x - torch.max(x, dim=i, keepdim=True).values)
     sums = torch.sum(x_norm, dim=i, keepdim=True)
     return x_norm / sums
+
+def scaled_dot_product_attention(
+    k: Float[Tensor, "... N d_k"],
+    q: Float[Tensor, "... M d_k"],
+    v: Float[Tensor, "... M d_v"],
+    mask : Float[Tensor, "... N M"]
+    ) -> Float[Tensor, "... M d_v"]:
+    att = einsum(q, k, "... M d_k, ... N d_k -> ... N M")
+    d_k = k.shape[-1]
+    att = att / sqrt(d_k)
+    mask = torch.where(mask==True, 0.0, float('-inf'))
+    att = add("... N M, ... N M -> ... N M", att, mask)
+    att = softmax(att, i=-1)
+    result = einsum(att, v, "... N M, ... M d_v -> ... N d_v")
+    return result
