@@ -73,9 +73,19 @@ class RMSNorm(nn.Module):
         result = x * inv_rms
         result = einsum(result, self.gain, "... d_model, ... d_model -> ... d_model")
         return result.to(in_dtype)
-        
+
+class SiLU(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * torch.sigmoid(x)
+
 class FeedForward(nn.Module):
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
+        """
+        SwiGLU version
+        """
         super().__init__()
         self.w1 = Linear(in_features=d_model, out_features=d_ff, device=device, dtype=dtype)
         self.w3 = Linear(in_features=d_model, out_features=d_ff, device=device, dtype=dtype)
