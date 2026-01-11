@@ -190,6 +190,14 @@ class Block(nn.Module):
         device=None,
         dtype=None
         ):
+        """
+        Implement the pre-norm Transformer block as described in §3.5 and illustrated in Figure 2. Your
+        Transformer block should accept (at least) the following parameters.
+        d_model: int Dimensionality of the Transformer block inputs.
+        num_heads: int Number of heads to use in multi-head self-attention.
+        d_ff: int Dimensionality of the position-wise feed-forward inner layer.
+        rope: RoPE | None - RoPE layer object (we will use a single object for all RoPE operations)
+        """
         super().__init__()
         self.rms_norm1 = RMSNorm(d_model, device=device, dtype=dtype)
         self.rms_norm2 = RMSNorm(d_model, device=device, dtype=dtype)
