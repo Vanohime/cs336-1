@@ -208,4 +208,41 @@ class Block(nn.Module):
         y = x + self.mha(self.rms_norm1(x), token_positions)
         return y + self.ffn(self.rms_norm2(y))
 
+class Transformer(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        context_length: int,
+        num_layers: int,
+        d_model: int, 
+        num_heads: int, 
+        d_ff: int, 
+        theta: float,
+        device=None,
+        dtype=None
+        ):
+        """
+        vocab_size: int The size of the vocabulary, necessary for determining the dimensionality of the token
+        embedding matrix.
+        context_length: int The maximum context length, necessary for determining the dimensionality of
+        the position embedding matrix.
+        num_layers: int The number of Transformer blocks to use.
+        """
+        super().__init__()
+
+        self.embedding = Embedding(vocab_size, d_model)
+        self.rope = RoPE(theta, d_model // num_heads, context_length, device)
+        self.blocks = nn.ModuleList(
+            [Block(d_model, num_heads, d_ff, self.rope, device, dtype) for _ in range(num_layers)]
+            )
+        self.final_norm = RMSNorm(d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(d_model, vocab_size, device, dtype)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.embedding(x)
+        for block in self.blocks:
+            x = block(x)
+        x = self.final_norm(x)
+        logits = self.lm_head(x)
+        return logits
 
