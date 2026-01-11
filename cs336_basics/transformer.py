@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from torch.nn import init
 from einops import rearrange, einsum
-from math import sqrt
+from math import sqrt, sin, cos
+import einx
 
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
@@ -82,4 +83,42 @@ class FeedForward(nn.Module):
         z = y * torch.sigmoid(y) # (..., d_ff)
         t = self.w3(x) # (..., d_ff)
         return self.w2(z * t) #(..., d_model)
+
+class RoPE(nn.Module):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        """
+        Construct the RoPE module and create buffers if needed.
+        theta: float Θ value for the RoPE
+        d_k: int dimension of query and key vectors
+        max_seq_len: int Maximum sequence length that will be inputted
+        device: torch.device | None = None Device to store the buffer on
+        """
+        super().__init__()
+        i_range = torch.arange(max_seq_len, device=device)
+        k_range = torch.arange(1,  d_k // 2 + 1, device=device)
+        i_grid, k_grid =  torch.meshgrid(i_range, k_range, indexing='ij') # (seq_len, d_k //2)
+        theta_tensor = torch.tensor(theta, device=device)
+        theta_i_k = i_grid / torch.pow(theta_tensor, (2 * k_grid - 2) / d_k) # (seq_len, d_k //2)
+        cos_ik = torch.cos(theta_i_k)
+        sin_ik = torch.sin(theta_i_k)
+        #Here we transpose the matrix, as torch uses row vectors, not column vectors
+        # TODO: use only einops.rearrange later
+        r_0 = torch.stack((cos_ik, sin_ik), dim=-1) # (seq_len, d_k //2, 2) 
+        r_1 = torch.stack((-sin_ik, cos_ik), dim=-1) # (seq_len, d_k //2, 2)
+        R = torch.stack((r_0, r_1), dim=-1) # (seq_len, d_k //2, 2, 2)
+        self.register_buffer("R", R, persistent=False)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        R = self.R[token_positions] # (..., num_tokens, d_k //2, 2, 2)
+        x_reshaped = rearrange(
+        x, 
+        "... num_tokens (d_half d_pair) -> ... num_tokens d_half d_pair",
+        d_pair=2
+        )
+        res = einsum(
+            x_reshaped, R,
+            "... num_tokens d_half d_pair_in, ... num_tokens d_half d_pair_out d_pair_in -> ... num_tokens d_half d_pair_out"
+        )
+        res = rearrange(res, "... num_tokens d_half d_pair -> ... num_tokens (d_half d_pair)", d_pair=2)
+        return res
 

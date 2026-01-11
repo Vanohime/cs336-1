@@ -8,7 +8,7 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
-from cs336_basics.transformer import Linear, Embedding, RMSNorm, FeedForward
+from cs336_basics.transformer import Linear, Embedding, RMSNorm, FeedForward, RoPE
 from torch.nn import Parameter
 
 def run_linear(
@@ -209,7 +209,8 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    r = RoPE(theta, d_k, max_seq_len)
+    return r.forward(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
