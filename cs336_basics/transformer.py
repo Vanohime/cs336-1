@@ -122,3 +122,7 @@ class RoPE(nn.Module):
         res = rearrange(res, "... num_tokens d_half d_pair -> ... num_tokens (d_half d_pair)", d_pair=2)
         return res
 
+def softmax(x: torch.Tensor, i: int) -> torch.Tensor:
+    x_norm = torch.exp(x - torch.max(x, dim=i, keepdim=True).values)
+    sums = torch.sum(x_norm, dim=i, keepdim=True)
+    return x_norm / sums
