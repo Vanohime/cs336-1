@@ -1,3 +1,4 @@
+from this import d
 import torch
 import torch.nn as nn
 from torch.nn import init
@@ -130,12 +131,12 @@ def softmax(x: torch.Tensor, i: int) -> torch.Tensor:
     return x_norm / sums
 
 def scaled_dot_product_attention(
-    k: Float[Tensor, "... N d_k"],
-    q: Float[Tensor, "... M d_k"],
+    q: Float[Tensor, "... N d_k"],
+    k: Float[Tensor, "... M d_k"],
     v: Float[Tensor, "... M d_v"],
     mask : Float[Tensor, "... N M"]
-    ) -> Float[Tensor, "... M d_v"]:
-    att = einsum(q, k, "... M d_k, ... N d_k -> ... N M")
+    ) -> Float[Tensor, "... N d_v"]:
+    att = einsum(q, k, "... N d_k, ... M d_k -> ... N M")
     d_k = k.shape[-1]
     att = att / sqrt(d_k)
     mask = torch.where(mask==True, 0.0, float('-inf'))
@@ -143,3 +144,36 @@ def scaled_dot_product_attention(
     att = softmax(att, i=-1)
     result = einsum(att, v, "... N M, ... M d_v -> ... N d_v")
     return result
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, rope: RoPE | None = None, device=None, dtype=None):
+        """
+        d_model: int Dimensionality of the Transformer block inputs.
+        num_heads: int Number of heads to use in multi-head self-attention
+        """
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.d_model: int = d_model
+        self.num_heads: int = num_heads
+        self.q = Linear(d_model, d_model, device, dtype)
+        self.k = Linear(d_model, d_model, device, dtype)
+        self.v = Linear(d_model, d_model, device, dtype)
+        self.out_proj = Linear(d_model, d_model, device, dtype)
+        self.rope = rope
+    
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        k, q, v = self.k(x), self.q(x), self.v(x)
+        
+        k = rearrange(k, "... N (num_heads d_head) -> ... num_heads N d_head", num_heads=self.num_heads)
+        q = rearrange(q, "... N (num_heads d_head) -> ... num_heads N d_head", num_heads=self.num_heads)
+        if self.rope and token_positions is not None:
+            k, q = self.rope.forward(k, token_positions), self.rope.forward(q, token_positions)
+        v = rearrange(v, "... N (num_heads d_head) -> ... num_heads N d_head", num_heads=self.num_heads)    
+        seq_len = x.shape[-2]
+        mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool))
+        mask = mask.broadcast_to(k.shape[:-2] + mask.shape)  # (..., N, N)
+        y = scaled_dot_product_attention(q, k, v, mask)
+        y = rearrange(y, "... num_heads N d_head -> ... N (num_heads d_head)")
+
+        return self.out_proj(y)
+
