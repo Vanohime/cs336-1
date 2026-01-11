@@ -111,7 +111,10 @@ class RoPE(nn.Module):
         R = torch.stack((r_0, r_1), dim=-1) # (seq_len, d_k //2, 2, 2)
         self.register_buffer("R", R, persistent=False)
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None) -> torch.Tensor:
+        if token_positions is None:
+            seq_len = x.shape[-2]
+            token_positions = torch.arange(seq_len, device=x.device)
         R = self.R[token_positions] # (..., num_tokens, d_k //2, 2, 2)
         x_reshaped = rearrange(
         x, 
@@ -166,7 +169,7 @@ class MultiHeadAttention(nn.Module):
         
         k = rearrange(k, "... N (num_heads d_head) -> ... num_heads N d_head", num_heads=self.num_heads)
         q = rearrange(q, "... N (num_heads d_head) -> ... num_heads N d_head", num_heads=self.num_heads)
-        if self.rope and token_positions is not None:
+        if self.rope:
             k, q = self.rope.forward(k, token_positions), self.rope.forward(q, token_positions)
         v = rearrange(v, "... N (num_heads d_head) -> ... num_heads N d_head", num_heads=self.num_heads)    
         seq_len = x.shape[-2]
@@ -176,4 +179,25 @@ class MultiHeadAttention(nn.Module):
         y = rearrange(y, "... num_heads N d_head -> ... N (num_heads d_head)")
 
         return self.out_proj(y)
+
+class Block(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,  
+        d_ff: int, 
+        rope: RoPE | None = None,
+        device=None,
+        dtype=None
+        ):
+        super().__init__()
+        self.rms_norm1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.rms_norm2 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.mha = MultiHeadAttention(d_model, num_heads, rope, device, dtype)
+        self.ffn = FeedForward(d_model, d_ff, device, dtype)
+    
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) ->  torch.Tensor:
+        y = x + self.mha(self.rms_norm1(x), token_positions)
+        return y + self.ffn(self.rms_norm2(y))
+
 
